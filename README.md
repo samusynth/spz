@@ -10,8 +10,8 @@ with minimal visual differences between the two.
 
 ### C++
 
-Requires `libz` as the only dependent library, otherwise the code is completely self-contained. No
-build system is provided (bring your own build).
+Requires `libz` as the only dependent library, otherwise the code is completely self-contained.
+A CMake build system is provided for convenience.
 
 ## API
 
