@@ -37,9 +37,10 @@ GaussianCloud loadSpzWrapper(const std::vector<uint8_t> &data) {
     return cloud;
 }
 
-GaussianCloud loadSpzFromBuffer(const uint8_t* data, size_t length) {
+GaussianCloud loadSpzFromBuffer(uint32_t data, size_t length) {
     // Create a view of the data without copying
-    std::vector<uint8_t> view(data, data + length);
+    uint8_t* dataPtr = reinterpret_cast<uint8_t*>(data);
+    std::vector<uint8_t> view(dataPtr, dataPtr + length);
     return loadSpz(view);
 }
 
