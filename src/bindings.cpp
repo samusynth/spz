@@ -37,6 +37,12 @@ GaussianCloud loadSpzWrapper(const std::vector<uint8_t> &data) {
     return cloud;
 }
 
+GaussianCloud loadSpzFromBuffer(const uint8_t* data, size_t length) {
+    // Create a view of the data without copying
+    std::vector<uint8_t> view(data, data + length);
+    return loadSpz(view);
+}
+
 } // namespace spz
 
 using namespace emscripten;
@@ -59,6 +65,7 @@ EMSCRIPTEN_BINDINGS(spz_bindings) {
         ;
 
     function("loadSpz", &spz::loadSpzWrapper);
+    function("loadSpzFromBuffer", &spz::loadSpzFromBuffer, allow_raw_pointers());
     function("saveSpz", &spz::saveSpzWrapper);
     
     // Retain allow_raw_pointers() only for functions that require it

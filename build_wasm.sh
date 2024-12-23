@@ -25,6 +25,7 @@ em++ --verbose \
      -s ASSERTIONS=1 \
      -s EXPORT_ES6=1 \
      -s EXPORTED_RUNTIME_METHODS=["FS"] \
+     -s EXPORTED_FUNCTIONS=["_malloc","_free"] \
      -lembind \
      -O3 \
      -o build_wasm/wasm/spz_bindings.js
