@@ -14,7 +14,6 @@ EM_JS(void, console_log, (const char* str), {
 namespace emscripten {
     // Register std::vector<uint8_t> with Embind
     EMSCRIPTEN_BINDINGS(vector_uint8_t_bindings) {
-        console_log("Registering vector bindings");
         register_vector<uint8_t>("vector_uint8_t");
     }
 }
@@ -49,7 +48,6 @@ GaussianCloud loadSpzFromBuffer(uint32_t data, size_t length) {
 using namespace emscripten;
 
 EMSCRIPTEN_BINDINGS(spz_bindings) {
-    console_log("Registering spz bindings");
     
     // Bind GaussianCloud
     class_<spz::GaussianCloud>("GaussianCloud")
@@ -71,7 +69,5 @@ EMSCRIPTEN_BINDINGS(spz_bindings) {
     
     // Retain allow_raw_pointers() only for functions that require it
     function("loadSplatFromPly", &spz::loadSplatFromPly, allow_raw_pointers());
-    function("saveSplatToPly", &spz::saveSplatToPly, allow_raw_pointers());
-    
-    console_log("Finished registering bindings");
+    function("saveSplatToPly", &spz::saveSplatToPly, allow_raw_pointers());    
 }
