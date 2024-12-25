@@ -15,9 +15,11 @@ em++ --verbose \
      src/cc/splat-c-types.cc \
      src/cc/splat-types.cc \
      src/bindings.cpp \
+     -lidbfs.js \
      -I src/cc \
      -s WASM=1 \
-     -s ALLOW_MEMORY_GROWTH=1 \
+     -s ALLOW_MEMORY_GROWTH=0 \
+     -s INITIAL_MEMORY=400MB \
      -s MODULARIZE=1 \
      -s ENVIRONMENT=web \
      -s USE_ZLIB=1 \
