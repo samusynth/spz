@@ -514,12 +514,39 @@ bool saveSpz(const GaussianCloud &g, std::vector<uint8_t> *out) {
   return compressGzipped(reinterpret_cast<const uint8_t *>(data.data()), data.size(), out);
 }
 
-PackedGaussians loadSpzPacked(const uint8_t *data, int size) {
-  std::string decompressed;
+PackedGaussians loadSpzPacked(const uint8_t* data, int size) {
+  // Instead of decompressing to a string first, decompress directly to a vector
+  std::vector<uint8_t> decompressed;
   if (!decompressGzipped(data, size, &decompressed))
     return {};
-  std::stringstream stream(std::move(decompressed));
+    
+  // Create stringstream that references the existing memory rather than copying
+  std::stringstream stream(
+    std::string(
+      reinterpret_cast<const char*>(decompressed.data()), 
+      decompressed.size()
+    ), 
+    std::ios::binary | std::ios::in
+  );
   return deserializePackedGaussians(stream);
+}
+
+// Consider adding a streaming version that processes chunks at a time
+PackedGaussians loadSpzPackedStreaming(std::istream& input) {
+  // Read in chunks rather than loading entire file at once
+  std::vector<uint8_t> compressed;
+  constexpr size_t chunkSize = 8192;
+  std::vector<uint8_t> chunk(chunkSize);
+  
+  while (input) {
+    input.read(reinterpret_cast<char*>(chunk.data()), chunkSize);
+    size_t bytesRead = input.gcount();
+    if (bytesRead > 0) {
+      compressed.insert(compressed.end(), chunk.data(), chunk.data() + bytesRead);
+    }
+  }
+  
+  return loadSpzPacked(compressed.data(), compressed.size());
 }
 
 PackedGaussians loadSpzPacked(const std::vector<uint8_t> &data) {
@@ -730,51 +757,13 @@ bool saveSplatToPly(const GaussianCloud &data, const std::string &filename) {
   const int shDim = static_cast<int>(data.sh.size() / N / 3);
   const int D = 17 + shDim * 3;
 
-  std::vector<float> values(N * D, 0.0f);
-  int outIdx = 0, i3 = 0, i4 = 0;
-  for (int i = 0; i < N; i++) {
-    // Position (x, y, z)
-    values[outIdx++] = data.positions[i3 + 0];
-    values[outIdx++] = data.positions[i3 + 1];
-    values[outIdx++] = data.positions[i3 + 2];
-    // Normals (nx, ny, nz): these are always zero, but some viewers expect them to be present
-    outIdx += 3;
-    // Color (r, g, b): DC component for spherical harmonics
-    values[outIdx++] = data.colors[i3 + 0];
-    values[outIdx++] = data.colors[i3 + 1];
-    values[outIdx++] = data.colors[i3 + 2];
-    // Spherical harmonics: Interleave so the coefficients are the fastest-changing axis and
-    // the channel (r, g, b) is slower-changing axis.
-    for (int j = 0; j < shDim; j++) {
-      values[outIdx++] = data.sh[(i * shDim + j) * 3];
-    }
-    for (int j = 0; j < shDim; j++) {
-      values[outIdx++] = data.sh[(i * shDim + j) * 3 + 1];
-    }
-    for (int j = 0; j < shDim; j++) {
-      values[outIdx++] = data.sh[(i * shDim + j) * 3 + 2];
-    }
-    // Alpha
-    values[outIdx++] = data.alphas[i];
-    // Scale (sx, sy, sz)
-    values[outIdx++] = data.scales[i3 + 0];
-    values[outIdx++] = data.scales[i3 + 1];
-    values[outIdx++] = data.scales[i3 + 2];
-    // Rotation (qw, qx, qy, qz)
-    values[outIdx++] = data.rotations[i4 + 3];
-    values[outIdx++] = data.rotations[i4 + 0];
-    values[outIdx++] = data.rotations[i4 + 1];
-    values[outIdx++] = data.rotations[i4 + 2];
-    i3 += 3;
-    i4 += 4;
-  }
-  CHECK_EQ(outIdx, values.size());
-
   std::ofstream out(filename, std::ios::binary);
   if (!out.good()) {
     SpzLog("[SPZ ERROR] Unable to open for writing: %s", filename.c_str());
     return false;
   }
+
+  // Write PLY header
   out << "ply\n";
   out << "format binary_little_endian 1.0\n";
   out << "element vertex " << N << "\n";
@@ -799,7 +788,72 @@ bool saveSplatToPly(const GaussianCloud &data, const std::string &filename) {
   out << "property float rot_2\n";
   out << "property float rot_3\n";
   out << "end_header\n";
-  out.write(reinterpret_cast<char *>(values.data()), values.size() * sizeof(float));
+
+  // Iterate over each point and write directly to the file
+  for (int i = 0, i3 = 0, i4 = 0; i < N; i++) {
+    // Position (x, y, z)
+    float x = data.positions[i3 + 0];
+    float y = data.positions[i3 + 1];
+    float z = data.positions[i3 + 2];
+    out.write(reinterpret_cast<char*>(&x), sizeof(float));
+    out.write(reinterpret_cast<char*>(&y), sizeof(float));
+    out.write(reinterpret_cast<char*>(&z), sizeof(float));
+
+    // Normals (nx, ny, nz): these are always zero
+    float nx = 0.0f, ny = 0.0f, nz_f = 0.0f;
+    out.write(reinterpret_cast<char*>(&nx), sizeof(float));
+    out.write(reinterpret_cast<char*>(&ny), sizeof(float));
+    out.write(reinterpret_cast<char*>(&nz_f), sizeof(float));
+
+    // Color (r, g, b): DC component for spherical harmonics
+    float r = data.colors[i3 + 0];
+    float g_col = data.colors[i3 + 1];
+    float b = data.colors[i3 + 2];
+    out.write(reinterpret_cast<char*>(&r), sizeof(float));
+    out.write(reinterpret_cast<char*>(&g_col), sizeof(float));
+    out.write(reinterpret_cast<char*>(&b), sizeof(float));
+
+    // Spherical harmonics: Interleave so the coefficients are the fastest-changing axis and
+    // the channel (r, g, b) is slower-changing axis.
+    for (int j = 0; j < shDim; j++) {
+      float sh_r = data.sh[(i * shDim + j) * 3];
+      out.write(reinterpret_cast<char*>(&sh_r), sizeof(float));
+    }
+    for (int j = 0; j < shDim; j++) {
+      float sh_g = data.sh[(i * shDim + j) * 3 + 1];
+      out.write(reinterpret_cast<char*>(&sh_g), sizeof(float));
+    }
+    for (int j = 0; j < shDim; j++) {
+      float sh_b = data.sh[(i * shDim + j) * 3 + 2];
+      out.write(reinterpret_cast<char*>(&sh_b), sizeof(float));
+    }
+
+    // Alpha
+    float opacity = data.alphas[i];
+    out.write(reinterpret_cast<char*>(&opacity), sizeof(float));
+
+    // Scale (sx, sy, sz)
+    float sx = data.scales[i3 + 0];
+    float sy = data.scales[i3 + 1];
+    float sz = data.scales[i3 + 2];
+    out.write(reinterpret_cast<char*>(&sx), sizeof(float));
+    out.write(reinterpret_cast<char*>(&sy), sizeof(float));
+    out.write(reinterpret_cast<char*>(&sz), sizeof(float));
+
+    // Rotation (qw, qx, qy, qz)
+    float qw = data.rotations[i4 + 3];
+    float qx = data.rotations[i4 + 0];
+    float qy = data.rotations[i4 + 1];
+    float qz = data.rotations[i4 + 2];
+    out.write(reinterpret_cast<char*>(&qw), sizeof(float));
+    out.write(reinterpret_cast<char*>(&qx), sizeof(float));
+    out.write(reinterpret_cast<char*>(&qy), sizeof(float));
+    out.write(reinterpret_cast<char*>(&qz), sizeof(float));
+
+    i3 += 3;
+    i4 += 4;
+  }
+
   out.close();
   if (!out.good()) {
     SpzLog("[SPZ ERROR] Failed to write to: %s", filename.c_str());
