@@ -755,7 +755,10 @@ bool saveSplatToPly(const GaussianCloud &data, const std::string &filename) {
   CHECK_EQ(data.alphas.size(), N);
   CHECK_EQ(data.colors.size(), N * 3);
   const int shDim = static_cast<int>(data.sh.size() / N / 3);
-  const int D = 17 + shDim * 3;
+  const int D = 17 + shDim * 3; // Number of floats per vertex
+  const size_t batchSizeBytes = 10 * 1024 * 1024; // 10 MB
+  const size_t floatsPerBatch = batchSizeBytes / sizeof(float);
+  const int verticesPerBatch = floatsPerBatch / D;
 
   std::ofstream out(filename, std::ios::binary);
   if (!out.good()) {
@@ -789,69 +792,78 @@ bool saveSplatToPly(const GaussianCloud &data, const std::string &filename) {
   out << "property float rot_3\n";
   out << "end_header\n";
 
-  // Iterate over each point and write directly to the file
-  for (int i = 0, i3 = 0, i4 = 0; i < N; i++) {
+  std::vector<float> buffer;
+  buffer.reserve(floatsPerBatch);
+
+  int i3 = 0, i4 = 0;
+  int batchVertices = 0;
+
+  for (int i = 0; i < N; i++) {
     // Position (x, y, z)
-    float x = data.positions[i3 + 0];
-    float y = data.positions[i3 + 1];
-    float z = data.positions[i3 + 2];
-    out.write(reinterpret_cast<char*>(&x), sizeof(float));
-    out.write(reinterpret_cast<char*>(&y), sizeof(float));
-    out.write(reinterpret_cast<char*>(&z), sizeof(float));
+    buffer.push_back(data.positions[i3 + 0]);
+    buffer.push_back(data.positions[i3 + 1]);
+    buffer.push_back(data.positions[i3 + 2]);
 
     // Normals (nx, ny, nz): these are always zero
-    float nx = 0.0f, ny = 0.0f, nz_f = 0.0f;
-    out.write(reinterpret_cast<char*>(&nx), sizeof(float));
-    out.write(reinterpret_cast<char*>(&ny), sizeof(float));
-    out.write(reinterpret_cast<char*>(&nz_f), sizeof(float));
+    buffer.push_back(0.0f);
+    buffer.push_back(0.0f);
+    buffer.push_back(0.0f);
 
     // Color (r, g, b): DC component for spherical harmonics
-    float r = data.colors[i3 + 0];
-    float g_col = data.colors[i3 + 1];
-    float b = data.colors[i3 + 2];
-    out.write(reinterpret_cast<char*>(&r), sizeof(float));
-    out.write(reinterpret_cast<char*>(&g_col), sizeof(float));
-    out.write(reinterpret_cast<char*>(&b), sizeof(float));
+    buffer.push_back(data.colors[i3 + 0]);
+    buffer.push_back(data.colors[i3 + 1]);
+    buffer.push_back(data.colors[i3 + 2]);
 
     // Spherical harmonics: Interleave so the coefficients are the fastest-changing axis and
     // the channel (r, g, b) is slower-changing axis.
     for (int j = 0; j < shDim; j++) {
-      float sh_r = data.sh[(i * shDim + j) * 3];
-      out.write(reinterpret_cast<char*>(&sh_r), sizeof(float));
+      buffer.push_back(data.sh[(i * shDim + j) * 3]);
     }
     for (int j = 0; j < shDim; j++) {
-      float sh_g = data.sh[(i * shDim + j) * 3 + 1];
-      out.write(reinterpret_cast<char*>(&sh_g), sizeof(float));
+      buffer.push_back(data.sh[(i * shDim + j) * 3 + 1]);
     }
     for (int j = 0; j < shDim; j++) {
-      float sh_b = data.sh[(i * shDim + j) * 3 + 2];
-      out.write(reinterpret_cast<char*>(&sh_b), sizeof(float));
+      buffer.push_back(data.sh[(i * shDim + j) * 3 + 2]);
     }
 
     // Alpha
-    float opacity = data.alphas[i];
-    out.write(reinterpret_cast<char*>(&opacity), sizeof(float));
+    buffer.push_back(data.alphas[i]);
 
     // Scale (sx, sy, sz)
-    float sx = data.scales[i3 + 0];
-    float sy = data.scales[i3 + 1];
-    float sz = data.scales[i3 + 2];
-    out.write(reinterpret_cast<char*>(&sx), sizeof(float));
-    out.write(reinterpret_cast<char*>(&sy), sizeof(float));
-    out.write(reinterpret_cast<char*>(&sz), sizeof(float));
+    buffer.push_back(data.scales[i3 + 0]);
+    buffer.push_back(data.scales[i3 + 1]);
+    buffer.push_back(data.scales[i3 + 2]);
 
     // Rotation (qw, qx, qy, qz)
-    float qw = data.rotations[i4 + 3];
-    float qx = data.rotations[i4 + 0];
-    float qy = data.rotations[i4 + 1];
-    float qz = data.rotations[i4 + 2];
-    out.write(reinterpret_cast<char*>(&qw), sizeof(float));
-    out.write(reinterpret_cast<char*>(&qx), sizeof(float));
-    out.write(reinterpret_cast<char*>(&qy), sizeof(float));
-    out.write(reinterpret_cast<char*>(&qz), sizeof(float));
+    buffer.push_back(data.rotations[i4 + 3]);
+    buffer.push_back(data.rotations[i4 + 0]);
+    buffer.push_back(data.rotations[i4 + 1]);
+    buffer.push_back(data.rotations[i4 + 2]);
 
     i3 += 3;
     i4 += 4;
+    batchVertices++;
+
+    // If buffer is full, write to file
+    if (batchVertices >= verticesPerBatch) {
+      out.write(reinterpret_cast<char*>(buffer.data()), buffer.size() * sizeof(float));
+      if (!out.good()) {
+        SpzLog("[SPZ ERROR] Failed to write batch to: %s", filename.c_str());
+        return false;
+      }
+      buffer.clear();
+      batchVertices = 0;
+    }
+  }
+
+  // Write any remaining data in the buffer
+  if (!buffer.empty()) {
+    out.write(reinterpret_cast<char*>(buffer.data()), buffer.size() * sizeof(float));
+    if (!out.good()) {
+      SpzLog("[SPZ ERROR] Failed to write final batch to: %s", filename.c_str());
+      return false;
+    }
+    buffer.clear();
   }
 
   out.close();
