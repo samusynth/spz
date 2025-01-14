@@ -514,12 +514,38 @@ bool saveSpz(const GaussianCloud &g, std::vector<uint8_t> *out) {
   return compressGzipped(reinterpret_cast<const uint8_t *>(data.data()), data.size(), out);
 }
 
-PackedGaussians loadSpzPacked(const uint8_t *data, int size) {
-  std::string decompressed;
+PackedGaussians loadSpzPacked(const uint8_t* data, int size) {
+  // Instead of decompressing to a string first, decompress directly to a vector
+  std::vector<uint8_t> decompressed;
   if (!decompressGzipped(data, size, &decompressed))
     return {};
-  std::stringstream stream(std::move(decompressed));
+    
+  // Create stringstream that references the existing memory rather than copying
+  std::stringstream stream(
+    std::string(
+      reinterpret_cast<const char*>(decompressed.data()), 
+      decompressed.size()
+    ), 
+    std::ios::binary | std::ios::in
+  );
   return deserializePackedGaussians(stream);
+}
+
+PackedGaussians loadSpzPackedStreaming(std::istream& input) {
+  // Read in chunks rather than loading entire file at once
+  std::vector<uint8_t> compressed;
+  constexpr size_t chunkSize = 8192;
+  std::vector<uint8_t> chunk(chunkSize);
+  
+  while (input) {
+    input.read(reinterpret_cast<char*>(chunk.data()), chunkSize);
+    size_t bytesRead = input.gcount();
+    if (bytesRead > 0) {
+      compressed.insert(compressed.end(), chunk.data(), chunk.data() + bytesRead);
+    }
+  }
+  
+  return loadSpzPacked(compressed.data(), compressed.size());
 }
 
 PackedGaussians loadSpzPacked(const std::vector<uint8_t> &data) {
@@ -728,53 +754,18 @@ bool saveSplatToPly(const GaussianCloud &data, const std::string &filename) {
   CHECK_EQ(data.alphas.size(), N);
   CHECK_EQ(data.colors.size(), N * 3);
   const int shDim = static_cast<int>(data.sh.size() / N / 3);
-  const int D = 17 + shDim * 3;
-
-  std::vector<float> values(N * D, 0.0f);
-  int outIdx = 0, i3 = 0, i4 = 0;
-  for (int i = 0; i < N; i++) {
-    // Position (x, y, z)
-    values[outIdx++] = data.positions[i3 + 0];
-    values[outIdx++] = data.positions[i3 + 1];
-    values[outIdx++] = data.positions[i3 + 2];
-    // Normals (nx, ny, nz): these are always zero, but some viewers expect them to be present
-    outIdx += 3;
-    // Color (r, g, b): DC component for spherical harmonics
-    values[outIdx++] = data.colors[i3 + 0];
-    values[outIdx++] = data.colors[i3 + 1];
-    values[outIdx++] = data.colors[i3 + 2];
-    // Spherical harmonics: Interleave so the coefficients are the fastest-changing axis and
-    // the channel (r, g, b) is slower-changing axis.
-    for (int j = 0; j < shDim; j++) {
-      values[outIdx++] = data.sh[(i * shDim + j) * 3];
-    }
-    for (int j = 0; j < shDim; j++) {
-      values[outIdx++] = data.sh[(i * shDim + j) * 3 + 1];
-    }
-    for (int j = 0; j < shDim; j++) {
-      values[outIdx++] = data.sh[(i * shDim + j) * 3 + 2];
-    }
-    // Alpha
-    values[outIdx++] = data.alphas[i];
-    // Scale (sx, sy, sz)
-    values[outIdx++] = data.scales[i3 + 0];
-    values[outIdx++] = data.scales[i3 + 1];
-    values[outIdx++] = data.scales[i3 + 2];
-    // Rotation (qw, qx, qy, qz)
-    values[outIdx++] = data.rotations[i4 + 3];
-    values[outIdx++] = data.rotations[i4 + 0];
-    values[outIdx++] = data.rotations[i4 + 1];
-    values[outIdx++] = data.rotations[i4 + 2];
-    i3 += 3;
-    i4 += 4;
-  }
-  CHECK_EQ(outIdx, values.size());
+  const int D = 17 + shDim * 3; // Number of floats per vertex
+  const size_t batchSizeBytes = 10 * 1024 * 1024; // 10 MB
+  const size_t floatsPerBatch = batchSizeBytes / sizeof(float);
+  const int verticesPerBatch = floatsPerBatch / D;
 
   std::ofstream out(filename, std::ios::binary);
   if (!out.good()) {
     SpzLog("[SPZ ERROR] Unable to open for writing: %s", filename.c_str());
     return false;
   }
+
+  // Write PLY header
   out << "ply\n";
   out << "format binary_little_endian 1.0\n";
   out << "element vertex " << N << "\n";
@@ -799,7 +790,81 @@ bool saveSplatToPly(const GaussianCloud &data, const std::string &filename) {
   out << "property float rot_2\n";
   out << "property float rot_3\n";
   out << "end_header\n";
-  out.write(reinterpret_cast<char *>(values.data()), values.size() * sizeof(float));
+
+  std::vector<float> buffer;
+  buffer.reserve(floatsPerBatch);
+
+  int i3 = 0, i4 = 0;
+  int batchVertices = 0;
+
+  for (int i = 0; i < N; i++) {
+    // Position (x, y, z)
+    buffer.push_back(data.positions[i3 + 0]);
+    buffer.push_back(data.positions[i3 + 1]);
+    buffer.push_back(data.positions[i3 + 2]);
+
+    // Normals (nx, ny, nz): these are always zero
+    buffer.push_back(0.0f);
+    buffer.push_back(0.0f);
+    buffer.push_back(0.0f);
+
+    // Color (r, g, b): DC component for spherical harmonics
+    buffer.push_back(data.colors[i3 + 0]);
+    buffer.push_back(data.colors[i3 + 1]);
+    buffer.push_back(data.colors[i3 + 2]);
+
+    // Spherical harmonics: Interleave so the coefficients are the fastest-changing axis and
+    // the channel (r, g, b) is slower-changing axis.
+    for (int j = 0; j < shDim; j++) {
+      buffer.push_back(data.sh[(i * shDim + j) * 3]);
+    }
+    for (int j = 0; j < shDim; j++) {
+      buffer.push_back(data.sh[(i * shDim + j) * 3 + 1]);
+    }
+    for (int j = 0; j < shDim; j++) {
+      buffer.push_back(data.sh[(i * shDim + j) * 3 + 2]);
+    }
+
+    // Alpha
+    buffer.push_back(data.alphas[i]);
+
+    // Scale (sx, sy, sz)
+    buffer.push_back(data.scales[i3 + 0]);
+    buffer.push_back(data.scales[i3 + 1]);
+    buffer.push_back(data.scales[i3 + 2]);
+
+    // Rotation (qw, qx, qy, qz)
+    buffer.push_back(data.rotations[i4 + 3]);
+    buffer.push_back(data.rotations[i4 + 0]);
+    buffer.push_back(data.rotations[i4 + 1]);
+    buffer.push_back(data.rotations[i4 + 2]);
+
+    i3 += 3;
+    i4 += 4;
+    batchVertices++;
+
+    // If buffer is full, write to file
+    if (batchVertices >= verticesPerBatch) {
+      out.write(reinterpret_cast<char*>(buffer.data()), buffer.size() * sizeof(float));
+      if (!out.good()) {
+        SpzLog("[SPZ ERROR] Failed to write batch to: %s", filename.c_str());
+        return false;
+      }
+      buffer.clear();
+      batchVertices = 0;
+    }
+  }
+
+  // Write any remaining data in the buffer
+  if (!buffer.empty()) {
+    out.write(reinterpret_cast<char*>(buffer.data()), buffer.size() * sizeof(float));
+    if (!out.good()) {
+      SpzLog("[SPZ ERROR] Failed to write final batch to: %s", filename.c_str());
+      return false;
+    }
+    buffer.clear();
+  }
+
   out.close();
   if (!out.good()) {
     SpzLog("[SPZ ERROR] Failed to write to: %s", filename.c_str());
