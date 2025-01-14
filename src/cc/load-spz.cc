@@ -531,7 +531,6 @@ PackedGaussians loadSpzPacked(const uint8_t* data, int size) {
   return deserializePackedGaussians(stream);
 }
 
-// Consider adding a streaming version that processes chunks at a time
 PackedGaussians loadSpzPackedStreaming(std::istream& input) {
   // Read in chunks rather than loading entire file at once
   std::vector<uint8_t> compressed;

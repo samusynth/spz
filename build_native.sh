@@ -12,14 +12,7 @@ BUILD_ROOT="${SCRIPT_DIR}"
 NATIVE_BUILD_DIR="${BUILD_ROOT}/build_native"
 WASM_BUILD_DIR="${BUILD_ROOT}/build_wasm"
 
-# Emscripten environment setup
-# Make sure to update this path to your actual emsdk installation
-EMSDK_DIR="${HOME}/Workspace/emsdk"
-if [ ! -d "${EMSDK_DIR}" ]; then
-  echo "Emscripten SDK not found at ${EMSDK_DIR}. Please update the EMSDK_DIR variable."
-  exit 1
-fi
-source "${EMSDK_DIR}/emsdk_env.sh"
+
 
 # Function to build native
 build_native() {
@@ -55,7 +48,16 @@ build_native() {
 }
 
 # Function to build WASM
+# TODO: This currently doesn't work. Use build_wasm.sh instead for wasm builds.
 build_wasm() {
+  # Emscripten environment setup
+  # Make sure to update this path to your actual emsdk installation
+  EMSDK_DIR="${HOME}/Workspace/emsdk"
+  if [ ! -d "${EMSDK_DIR}" ]; then
+    echo "Emscripten SDK not found at ${EMSDK_DIR}. Please update the EMSDK_DIR variable."
+    exit 1
+  fi
+  source "${EMSDK_DIR}/emsdk_env.sh"
   echo "=== Building WASM Version ==="
 
   # Create build directory if it doesn't exist
@@ -101,6 +103,6 @@ clean_builds
 
 # Build both targets
 build_native
-build_wasm
+
 
 echo "=== All Builds Completed Successfully ==="
