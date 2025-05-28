@@ -136,6 +136,25 @@ float norm(const Quat4f &q);
 Quat4f normalized(const Quat4f &v);
 Quat4f axisAngleQuat(const Vec3f &scaledAxis);
 
+// Constexpr-compatible square root implementation for older compilers
+constexpr float constexpr_sqrt(float x) {
+  if (x <= 0.0f) return 0.0f;
+  float curr = x;
+  float prev = 0.0f;
+  while (curr != prev) {
+    prev = curr;
+    curr = 0.5f * (curr + x / curr);
+  }
+  return curr;
+}
+
+// Add constexpr version of normalized for use in constexpr contexts
+constexpr Quat4f constexpr_normalized(const Quat4f &v) {
+  float norm_squared = v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3];
+  float norm = constexpr_sqrt(norm_squared);
+  return {v[0] / norm, v[1] / norm, v[2] / norm, v[3] / norm};
+}
+
 // Constexpr helpers.
 constexpr Vec3f vec3f(const float *data) { return {data[0], data[1], data[2]}; }
 
@@ -171,7 +190,7 @@ constexpr Vec3f times(const Quat4f &q, const Vec3f &p) {
 constexpr Quat4f times(const Quat4f &a, const Quat4f &b) {
   auto [w, x, y, z] = a;
   auto [qw, qx, qy, qz] = b;
-  return normalized(std::array<float, 4>{
+  return constexpr_normalized(std::array<float, 4>{
     w * qw - x * qx - y * qy - z * qz,
     w * qx + x * qw + y * qz - z * qy,
     w * qy - x * qz + y * qw + z * qx,
